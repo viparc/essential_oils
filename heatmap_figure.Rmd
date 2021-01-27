@@ -1,0 +1,176 @@
+---
+title: "Heatmap figure"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+```
+
+## Packages
+
+```{r}
+library(magrittr)
+library(stringr)
+library(purrr)
+library(tidyr)
+library(corrplot)
+library(dplyr)
+```
+
+## Data
+
+Reading the data:
+
+```{r}
+data <- readxl::read_excel("Data_EOs.xlsx")
+```
+
+Reformating the names of the products:
+
+```{r}
+names(data) <- data %>%
+  names() %>%
+  str_replace("Activo", "product A") %>% 
+  str_replace("Cinamon", "Cinnamon") %>% 
+  str_replace(" ", "_")
+```
+
+## The functions we need
+
+This function makes a formula from `x` and `y`, correcting for pathogens:
+
+```{r}
+make_formula <- function(y, x) {
+  formula(paste0("log2(", y, ") ~  Pathogen + log2(", x, ")"))
+}
+```
+
+This function returns a value of correlation coefficient (corrected for pathogens)
+together with p values from the LRT:
+
+```{r}
+cor_coef <- function(x, y) {
+  if(x == y) return(c(corcoef = 1, p_value = 0, coefval = 1))
+  mod <- glm(make_formula(x, y), data = data)
+  ano <- anova(mod, test = "LRT")
+  c(corcoef = sign(unname(last(coef(mod)))) * last(ano$Deviance) / first(tail(ano$`Resid. Dev`, 2)),
+    p_value = last(ano$`Pr(>Chi)`),
+    coefval = last(coef(mod)))
+}
+```
+
+Let's try them:
+
+```{r}
+cor_coef("COL", "ENR")
+```
+
+and:
+
+```{r}
+cor_coef("COL", "COL")
+```
+
+## Let's run for all the combinations
+
+Let's extract the names of the essential oils and antibiotics:
+
+```{r}
+ab_eo <- rev(setdiff(names(data), c("No.", "Pathogen")))
+```
+
+Another set of names where `_` is replaced by a space:
+
+```{r}
+ab_eo2 <- str_replace(ab_eo, "_", " ")
+```
+
+Let's make all the combinations of essential oils and antibiotics:
+
+```{r}
+combinations <- expand_grid(v1 = ab_eo, v2 = ab_eo)
+```
+
+Calculating the correlation coefficients and p values for all the combinations
+of essential oils and antibiotics:
+
+```{r}
+corval <- combinations %>% 
+  mutate(a = map2(v1, v2, cor_coef)) %>% 
+  unnest_wider(a)
+```
+
+Which gives:
+
+```{r}
+corval
+```
+
+This function arranges the results into a named matrix for later use by the
+`corrplot::corrplot()` function:
+
+```{r}
+put_in_shape <- function(x) {
+  x %>%
+    select(-v1) %>% 
+    as.matrix() %>% 
+    `rownames<-`(ab_eo2) %>% 
+    `colnames<-`(ab_eo2)
+}
+```
+
+Using this function to generate a matrix of p values:
+
+```{r}
+pmat <- corval %>% 
+  select(-corcoef, -coefval) %>% 
+  pivot_wider(names_from = v2, values_from = p_value) %>% 
+  put_in_shape()
+```
+
+a matrix of correlation coefficients:
+
+```{r}
+cormat <- corval %>% 
+  select(-p_value, -coefval) %>% 
+  pivot_wider(names_from = v2, values_from = corcoef) %>% 
+  put_in_shape()
+```
+
+and a matrix of regression coefficients:
+
+```{r}
+coefmat <- corval %>% 
+  select(-p_value, -corcoef) %>% 
+  pivot_wider(names_from = v2, values_from = coefval) %>% 
+  put_in_shape()
+```
+
+## Correlation matrix figure
+
+Replacing non-significant p values by `NA`:
+
+```{r}
+coefmat[which(pmat > .05)] <- NA
+```
+
+Generating a color palette:
+
+```{r}
+col2 <- colorRampPalette(c("#67001F", "#B2182B", "#D6604D", "#F4A582",
+                           "#FDDBC7", "#FFFFFF", "#D1E5F0", "#92C5DE",
+                           "#4393C3", "#2166AC", "#053061"))
+```
+
+Making the plot, in 2 steps:
+
+```{r fig.height=11, fig.width=11, error = TRUE}
+corrplot(cormat, "upper", diag = FALSE, p.mat = pmat, method = "color",
+         sig.level = 1, cl.pos = "b", tl.col = "black", col = col2(20))
+corrplot(coefmat, "upper", diag = FALSE, method = "number", bg = "transparent",
+         cl.pos = "n", col = "black", number.font = 1, na.label = "",
+         is.corr = FALSE, add = TRUE)
+```
