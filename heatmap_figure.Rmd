@@ -33,7 +33,7 @@ Reformating the names of the products:
 ```{r}
 names(data) <- data %>%
   names() %>%
-  str_replace("Activo", "product A") %>% 
+  str_replace("Activo", "Product A") %>% 
   str_replace("Cinamon", "Cinnamon") %>% 
   str_replace(" ", "_")
 ```
